@@ -13,28 +13,25 @@
     
     <!-- Firebase SDK (Must be V11+) -->
     <script type="module">
-        import { initializeApp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js"; // setLogLevel 추가
+        import { initializeApp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, limit, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         
-        // Define global variables for use in the main script block
         window.firebase = { 
             initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
             getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, limit, orderBy,
-            setLogLevel // setLogLevel을 전역으로 내보냅니다.
+            setLogLevel 
         };
         window.firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
         window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         window.initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
         
-        // Polyfill for crypto.randomUUID for environments that don't support it (like some iframes)
         if (typeof crypto.randomUUID === 'undefined') {
             crypto.randomUUID = () => 'anon-' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
         }
     </script>
 
     <style>
-        /* General Styles for Mobile Responsiveness */
         .pb-safe {
             padding-bottom: constant(safe-area-inset-bottom);
             padding-bottom: env(safe-area-inset-bottom);
@@ -80,6 +77,17 @@
     <script type="text/babel">
         const { useState, useEffect, useReducer } = React;
 
+        // --- Helper: Get Week ID (ISO Week) ---
+        // 주차별 고유 ID를 생성합니다 (예: "2025-W12")
+        const getWeekId = () => {
+            const d = new Date();
+            d.setHours(0,0,0,0);
+            d.setDate(d.getDate() + 4 - (d.getDay()||7));
+            const yearStart = new Date(d.getFullYear(),0,1);
+            const weekNo = Math.ceil(( ( (d - yearStart) / 86400000) + 1)/7);
+            return `${d.getFullYear()}-W${weekNo}`;
+        };
+
         // --- Icon Mockup (Emoji) ---
         const Icon = (emoji) => ({ className, ...props }) => (
             <span className={className} {...props} style={{ fontSize: '1.25rem', lineHeight: 1 }}>{emoji}</span>
@@ -106,10 +114,11 @@
                 { id: 2, type: 'BOX', title: "택배 상자 테이프 제거 및 펼치기", points: 15 },
                 { id: 3, type: 'CAN', title: "캔 내용물 비우고 깨끗하게 헹궈 배출", points: 10 },
             ],
+            // 주간 미션 내용을 '사진 인증'이 가능한 내용으로 변경
             WEEKLY: [
-                { id: 101, type: 'ALL', title: "일주일 연속 분리수거 성공 (스트릭 유지)", points: 100 },
-                { id: 102, type: 'GLASS', title: "깨진 유리류 안전하게 모아 폐기물 처리", points: 50 },
-                { id: 103, type: 'BATTERY', title: "폐건전지 10개 이상 수거함에 배출", points: 80 },
+                { id: 101, type: 'BATTERY', title: "폐건전지/형광등 전용 수거함 배출하기", points: 100 },
+                { id: 102, type: 'GLASS', title: "깨진 유리류 안전하게 밀봉하여 배출", points: 100 },
+                { id: 103, type: 'CLOTHES', title: "안 입는 옷 의류수거함에 정리하기", points: 100 },
             ]
         };
         const BADGES = [
@@ -134,13 +143,14 @@
                 streak: 0,
                 lastCompletedDate: null,
                 dailyRecord: {},
+                weeklyRecord: {}, // 주간 기록 추가
                 challengeLog: [],
                 discardStats: { PET: 0, BOX: 0, CAN: 0, PLASTIC: 0, VINYL: 0, ALL: 0 },
                 badges: [],
             },
             // UI State
             dailyChallenge: null,
-            weeklyChallenge: CHALLENGES.WEEKLY[0], // 주간 미션은 고정
+            weeklyChallenge: CHALLENGES.WEEKLY[0],
             globalRanking: [],
             error: null,
             showConfetti: false,
@@ -154,12 +164,18 @@
                     console.error("Firestore Error:", action.payload);
                     return { ...state, error: action.payload };
                 case 'SET_USER_DATA':
-                    // Check and assign badges
                     const updatedBadges = BADGES
                         .filter(b => action.payload.totalPoints >= b.threshold)
                         .map(b => ({ name: b.name, icon: b.icon }));
 
-                    return { ...state, userData: { ...action.payload, badges: updatedBadges } };
+                    // weeklyRecord가 없는 구버전 데이터를 위한 방어 코드
+                    const safeUserData = {
+                        ...action.payload,
+                        weeklyRecord: action.payload.weeklyRecord || {},
+                        badges: updatedBadges
+                    };
+
+                    return { ...state, userData: safeUserData };
                 case 'SET_RANKING':
                     return { ...state, globalRanking: action.payload };
                 case 'SET_CHALLENGES':
@@ -172,8 +188,6 @@
                     return state;
             }
         };
-
-        // --- Firestore Helpers ---
 
         const getUserProfileRef = (db, appId, userId) => {
             return firebase.doc(db, `artifacts/${appId}/users/${userId}/data`, 'user_profile');
@@ -193,7 +207,6 @@
             const [state, dispatch] = useReducer(reducer, initialState);
             const [activeTab, setActiveTab] = useState('home');
 
-            // 1. Firebase Initialization and Authentication
             useEffect(() => {
                 const initFirebase = async () => {
                     if (!window.firebase || !window.firebaseConfig.apiKey) {
@@ -202,23 +215,19 @@
                     }
                     
                     try {
-                        // Firebase 앱 초기화 및 서비스 가져오기
                         const app = window.firebase.initializeApp(window.firebaseConfig);
                         const auth = window.firebase.getAuth(app);
                         const db = window.firebase.getFirestore(app);
                         
-                        // 디버그 로깅 활성화 (오류 진단에 유용)
                         if (window.firebase.setLogLevel) {
                             window.firebase.setLogLevel('debug');
                         }
 
-                        // Authenticate user
                         await new Promise(resolve => {
                             const unsubscribe = window.firebase.onAuthStateChanged(auth, async (user) => {
                                 if (user) {
                                     resolve(user.uid);
                                 } else {
-                                    // Try signing in with custom token or anonymously
                                     try {
                                         if (window.initialAuthToken) {
                                             const credential = await window.firebase.signInWithCustomToken(auth, window.initialAuthToken);
@@ -228,7 +237,7 @@
                                             resolve(credential.user.uid);
                                         }
                                     } catch (e) {
-                                        console.error("Authentication failed, falling back to anonymous sign-in failed:", e);
+                                        console.error("Authentication failed:", e);
                                         const anonId = crypto.randomUUID();
                                         resolve(anonId);
                                     }
@@ -241,12 +250,10 @@
                         
                         dispatch({ type: 'SET_INIT_SUCCESS', payload: { db, auth, userId } });
 
-                        // Check and initialize user data if needed
                         const profileRef = getUserProfileRef(db, window.appId, userId);
                         const profileSnap = await window.firebase.getDoc(profileRef);
 
                         if (!profileSnap.exists()) {
-                            // Initialize new user profile
                             const newProfile = {
                                 ...initialState.userData,
                                 userId: userId,
@@ -268,11 +275,9 @@
                 initFirebase();
             }, []);
             
-            // 2. Data Listeners (onSnapshot)
             useEffect(() => {
                 if (!state.isAuthReady || !state.userId || !state.db) return;
 
-                // A. User Profile Listener
                 const profileRef = getUserProfileRef(state.db, window.appId, state.userId);
                 const unsubscribeProfile = window.firebase.onSnapshot(profileRef, (doc) => {
                     if (doc.exists()) {
@@ -281,28 +286,20 @@
                     }
                 }, (error) => {
                     console.error("User Profile Snapshot Error:", error);
-                    dispatch({ type: 'SET_ERROR', payload: error.message });
                 });
 
-                // B. Global Ranking Listener (orderBy 제거 및 인메모리 정렬로 수정)
                 const rankingQuery = window.firebase.query(
                     getGlobalRankingCollection(state.db, window.appId),
-                    window.firebase.limit(50) // 상위 50개 문서만 가져옵니다.
+                    window.firebase.limit(50)
                 );
                 const unsubscribeRanking = window.firebase.onSnapshot(rankingQuery, (snapshot) => {
                     let rankingData = snapshot.docs.map(doc => doc.data());
-                    
-                    // Firestore 인덱스 오류를 피하기 위해 메모리에서 정렬합니다.
                     rankingData.sort((a, b) => b.totalPoints - a.totalPoints);
-                    
-                    // 상위 10개만 화면에 표시합니다.
                     dispatch({ type: 'SET_RANKING', payload: rankingData.slice(0, 10) }); 
                 }, (error) => {
                     console.error("Ranking Snapshot Error:", error);
                 });
                 
-                // C. Daily Challenge Setup
-                // Re-generate daily challenge if date changes
                 const todayKey = new Date().toDateString();
                 const storedChallenge = state.dailyChallenge || CHALLENGES.DAILY[Math.floor(Math.random() * CHALLENGES.DAILY.length)];
                 
@@ -310,7 +307,6 @@
                     dispatch({ type: 'SET_CHALLENGES', payload: { daily: storedChallenge, weekly: CHALLENGES.WEEKLY[0] } });
                 }
 
-                // Cleanup function
                 return () => {
                     unsubscribeProfile();
                     unsubscribeRanking();
@@ -321,22 +317,28 @@
 
             const handleCompleteChallenge = async (challenge, type) => {
                 if (!state.userId || !state.db || !state.userData) return;
-                const todayKey = new Date().toDateString();
                 
-                // 1. Check if already completed (Daily only)
+                const todayKey = new Date().toDateString();
+                const weekKey = getWeekId(); // 이번 주 ID 가져오기
+
+                // 1. 중복 완료 체크 (Daily & Weekly 모두 적용)
                 if (type === 'DAILY' && state.userData.dailyRecord[todayKey]) {
                     console.log("Daily challenge already completed today.");
                     return;
                 }
+                if (type === 'WEEKLY' && state.userData.weeklyRecord && state.userData.weeklyRecord[weekKey]) {
+                    console.log("Weekly challenge already completed this week.");
+                    return;
+                }
                 
-                // 2. Update user data fields
+                // 2. Update Data
                 const newPoints = state.userData.totalPoints + challenge.points;
                 let newStreak = state.userData.streak;
                 let newDailyRecord = { ...state.userData.dailyRecord };
+                let newWeeklyRecord = { ...(state.userData.weeklyRecord || {}) }; // 주간 기록 복사
                 let newDiscardStats = { ...state.userData.discardStats };
 
                 if (type === 'DAILY') {
-                    // Streak logic: Check if yesterday was completed
                     const today = new Date();
                     const yesterday = new Date(today);
                     yesterday.setDate(today.getDate() - 1);
@@ -345,13 +347,15 @@
                     if (state.userData.lastCompletedDate === yesterdayKey) {
                         newStreak = state.userData.streak + 1;
                     } else if (state.userData.lastCompletedDate !== todayKey) {
-                        newStreak = 1; // Start new streak if not today
+                        newStreak = 1;
                     }
-                    
                     newDailyRecord[todayKey] = true;
                 }
+
+                if (type === 'WEEKLY') {
+                    newWeeklyRecord[weekKey] = true; // 주간 완료 기록 저장
+                }
                 
-                // Update stats
                 newDiscardStats[challenge.type] = (newDiscardStats[challenge.type] || 0) + 1;
                 newDiscardStats['ALL'] = (newDiscardStats['ALL'] || 0) + 1;
 
@@ -359,27 +363,29 @@
                 const rankingRef = getGlobalRankingRef(state.db, window.appId, state.userId);
 
                 try {
-                    // Batch updates (simulated here for simplicity, using updateDoc)
-                    await window.firebase.updateDoc(profileRef, {
+                    // Update User Profile
+                    await window.firebase.setDoc(profileRef, {
                         totalPoints: newPoints,
                         streak: newStreak,
                         lastCompletedDate: todayKey,
                         dailyRecord: newDailyRecord,
+                        weeklyRecord: newWeeklyRecord, // 주간 기록 저장
                         discardStats: newDiscardStats,
                         challengeLog: [...state.userData.challengeLog, { 
                             date: new Date().toISOString(), 
                             challengeId: challenge.id, 
-                            points: challenge.points 
+                            points: challenge.points,
+                            type: type
                         }]
-                    });
+                    }, { merge: true });
 
-                    // Update public ranking
-                    await window.firebase.updateDoc(rankingRef, {
+                    // Update Public Ranking
+                    await window.firebase.setDoc(rankingRef, {
                         totalPoints: newPoints,
+                        displayName: state.userData.displayName,
                         lastUpdated: new Date()
-                    });
+                    }, { merge: true });
 
-                    // UI Feedback
                     dispatch({ type: 'SHOW_CONFETTI' });
                     setTimeout(() => dispatch({ type: 'HIDE_CONFETTI' }), 800);
                     
@@ -391,7 +397,6 @@
             const handleNewDailyChallenge = () => {
                 const newChallenge = CHALLENGES.DAILY[Math.floor(Math.random() * CHALLENGES.DAILY.length)];
                 dispatch({ type: 'SET_CHALLENGES', payload: { daily: newChallenge, weekly: state.weeklyChallenge } });
-                // Note: Daily challenge state is local until completed.
             };
 
 
@@ -439,7 +444,6 @@
             );
         }
 
-        // --- Component: Header ---
         const Header = ({ level, totalPoints, displayName, userId }) => (
             <header className="bg-gradient-to-r from-emerald-500 to-green-600 text-white p-4 shadow-xl sticky top-0 z-40">
                 <div className="flex justify-between items-center max-w-md mx-auto">
@@ -467,24 +471,24 @@
             return '🌱';
         };
         
-        // --- Component: Home View ---
         const HomeView = ({ state, handleCompleteChallenge, handleNewDailyChallenge }) => {
             const { userData, dailyChallenge, weeklyChallenge, showConfetti } = state;
             const todayKey = new Date().toDateString();
+            const weekKey = getWeekId();
+            
             const isDailyCompleted = userData.dailyRecord[todayKey];
+            const isWeeklyCompleted = userData.weeklyRecord ? userData.weeklyRecord[weekKey] : false;
+            
             const currentLevel = Math.floor(userData.totalPoints / 100) + 1;
 
             return (
                 <div className="p-4 space-y-4 pb-20">
-                    {/* 1. 스테이크 및 레벨 */}
                     <div className="grid grid-cols-2 gap-4">
-                         {/* Streak */}
                         <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
                             <Flame className={`w-8 h-8 mx-auto mb-1 ${userData.streak > 0 ? 'text-red-500' : 'text-gray-400'}`} />
                             <h2 className="text-2xl font-extrabold text-gray-800">{userData.streak}일 연속</h2>
                             <p className="text-xs text-gray-500">🔥 연속 성공</p>
                         </div>
-                        {/* Level */}
                         <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                              <h3 className="text-base font-bold text-gray-800 flex items-center mb-1">
                                 <Trophy className="w-4 h-4 mr-1 text-yellow-500" />
@@ -503,7 +507,6 @@
                         </div>
                     </div>
 
-                    {/* 2. 오늘의 미션 */}
                     <ChallengeCard 
                         challenge={dailyChallenge}
                         type="DAILY"
@@ -513,11 +516,10 @@
                         showConfetti={showConfetti}
                     />
 
-                     {/* 3. 주간 미션 (Weekly) */}
                     <ChallengeCard 
                         challenge={weeklyChallenge}
                         type="WEEKLY"
-                        isCompleted={userData.streak >= 7} // 주간 미션: 7일 스트릭 성공으로 가정
+                        isCompleted={isWeeklyCompleted}
                         handleComplete={() => handleCompleteChallenge(weeklyChallenge, 'WEEKLY')}
                         showConfetti={false}
                     />
@@ -525,7 +527,6 @@
             );
         };
         
-        // --- Component: Reusable Challenge Card ---
         const ChallengeCard = ({ challenge, type, isCompleted, handleComplete, handleNewChallenge, showConfetti }) => (
             <div className="bg-white border-2 border-blue-200 rounded-3xl p-6 shadow-lg relative overflow-hidden">
                 {showConfetti && (
@@ -544,7 +545,7 @@
                 )}
                 <h3 className={`text-lg font-bold flex items-center mb-2 ${type === 'DAILY' ? 'text-blue-800' : 'text-purple-800'}`}>
                     <Target className="w-5 h-5 mr-2 text-blue-500" />
-                    {type === 'DAILY' ? `오늘의 미션 (${challenge.points} P)` : `주간 챌린지 (${challenge.points} P)`}
+                    {type === 'DAILY' ? `오늘의 미션 (${challenge.points} P)` : `주간 특별 미션 (${challenge.points} P)`}
                 </h3>
                 <p className="text-xl font-extrabold text-gray-800 leading-snug mb-5">
                     {challenge.title}
@@ -561,7 +562,7 @@
                 ) : (
                     <div className="w-full bg-green-500 text-white py-4 rounded-xl font-bold text-center flex items-center justify-center">
                         <CheckCircle className="w-6 h-6 mr-2" />
-                        {type === 'DAILY' ? '오늘의 미션 완료!' : '주간 챌린지 성공!'}
+                        {type === 'DAILY' ? '오늘의 미션 완료!' : '이번 주 미션 완료!'}
                     </div>
                 )}
                 {(type === 'DAILY' && !isCompleted) && (
@@ -576,7 +577,6 @@
         );
 
 
-        // --- Component: Ranking View ---
         const RankingView = ({ state }) => {
             const { globalRanking, userId } = state;
             
@@ -606,14 +606,12 @@
             );
         };
         
-        // --- Component: Stats View (Environmental Contribution) ---
         const StatsView = ({ state }) => {
             const { userData } = state;
             const totalRecycledCount = userData.discardStats.ALL || 0;
-            const treeGrowthPercentage = Math.min(100, (totalRecycledCount * 5)); // 20회 성공 시 100% 성장
-            const treeLevel = Math.floor(treeGrowthPercentage / 20); // 5단계 나무 성장
+            const treeGrowthPercentage = Math.min(100, (totalRecycledCount * 5));
+            const treeLevel = Math.floor(treeGrowthPercentage / 20);
 
-            // Stats for chart
             const stats = Object.entries(userData.discardStats)
                 .filter(([key]) => key !== 'ALL')
                 .map(([type, count]) => ({ type, count }))
@@ -631,7 +629,6 @@
                         나의 환경 기여도
                     </h2>
 
-                    {/* Tree Visualization */}
                     <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100 text-center">
                         <h3 className="text-xl font-bold text-gray-700 mb-4">
                             나만의 에코 나무 키우기 (Level {treeLevel})
@@ -657,7 +654,6 @@
                         </p>
                     </div>
 
-                    {/* Badges */}
                     <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
                         <h3 className="text-xl font-bold text-gray-700 flex items-center mb-3">
                             <Badge className="w-5 h-5 mr-2 text-yellow-500" />
@@ -673,7 +669,6 @@
                         </div>
                     </div>
 
-                    {/* Stats Chart (Simplified) */}
                     <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
                         <h3 className="text-xl font-bold text-gray-700 flex items-center mb-4">
                             <i className="fas fa-chart-bar mr-2"></i>
@@ -701,7 +696,6 @@
             );
         };
         
-        // --- Component: Community View (Placeholder) ---
         const CommunityView = () => (
             <div className="p-8 text-center pt-20">
                 <Community className="text-6xl text-gray-300 mb-4" />
@@ -713,7 +707,6 @@
         );
 
 
-        // --- Component: TabBar ---
         const TabBar = ({ activeTab, setActiveTab }) => {
             const tabs = [
                 { id: 'home', icon: Home, label: '미션' },
@@ -746,9 +739,6 @@
             );
         };
 
-
-        // --- Render App ---
-        // Wait for the Firebase global variables to be defined by the module script
         window.onload = () => {
              const container = document.getElementById('root');
              if (container) {
