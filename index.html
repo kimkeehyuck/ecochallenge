@@ -3,160 +3,751 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Firebase 설정 확인</title>
+    <title>에코 챌린저 PRO - 그룹 랭킹 & 환경 기여</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & Babel CDN -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Firebase SDK (Must be V11+) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, limit, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // Define global variables for use in the main script block
+        window.firebase = { 
+            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
+            getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, limit, orderBy 
+        };
+        window.firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        window.initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        
+        // Polyfill for crypto.randomUUID for environments that don't support it (like some iframes)
+        if (typeof crypto.randomUUID === 'undefined') {
+            crypto.randomUUID = () => 'anon-' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+        }
+    </script>
+
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: #f7f7f7;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            min-height: 100vh;
-            padding: 2rem;
+        /* General Styles for Mobile Responsiveness */
+        .pb-safe {
+            padding-bottom: constant(safe-area-inset-bottom);
+            padding-bottom: env(safe-area-inset-bottom);
         }
-        .container {
-            max-width: 600px;
-            width: 100%;
-            background-color: white;
-            padding: 2rem;
-            border-radius: 12px;
-            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+        .animate-confetti {
+            animation: confetti-burst 0.8s cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
         }
-        .status-box {
-            padding: 1rem;
-            border-radius: 8px;
-            margin-top: 1rem;
-            font-weight: 600;
+        @keyframes confetti-burst {
+            0% { transform: scale(0); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
         }
-        .success {
-            background-color: #d1fae5; /* green-100 */
-            color: #065f46; /* green-900 */
+        .tree-container {
+            width: 100px;
+            height: 100px;
+            position: relative;
+            margin: 0 auto;
         }
-        .error {
-            background-color: #fee2e2; /* red-100 */
-            color: #991b1b; /* red-900 */
+        .tree-base {
+            width: 20px;
+            height: 40px;
+            background: #8B4513; /* Brown */
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+        .tree-leaves {
+            width: 0;
+            height: 0;
+            background: #38A169; /* Green */
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            transition: all 1s ease-out;
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1 class="text-2xl font-bold mb-4 text-gray-800 border-b pb-2">Firebase 초기화 상태</h1>
-        <div id="status-message" class="status-box">초기화 중...</div>
-        <div id="user-info" class="mt-4 p-4 bg-gray-50 rounded-lg border">
-            <h2 class="font-semibold text-lg mb-2 text-gray-700">사용자 인증 정보</h2>
-            <p class="text-sm text-gray-600">User ID: <span id="user-id" class="font-mono text-xs bg-gray-200 px-2 py-0.5 rounded">...</span></p>
-            <p class="text-sm text-gray-600 mt-1">Provider ID: <span id="provider-id" class="font-mono text-xs bg-gray-200 px-2 py-0.5 rounded">...</span></p>
-        </div>
-    </div>
+    <div id="root"></div>
 
-    <script type="module">
-        // 필요한 Firebase 모듈을 CDN에서 가져옵니다.
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    <script type="text/babel">
+        const { useState, useEffect, useReducer } = React;
+
+        // --- Icon Mockup (Emoji) ---
+        const Icon = (emoji) => ({ className, ...props }) => (
+            <span className={className} {...props} style={{ fontSize: '1.25rem', lineHeight: 1 }}>{emoji}</span>
+        );
+        const Award = Icon('🏆');
+        const Zap = Icon('⚡');
+        const Target = Icon('🎯');
+        const Trophy = Icon('🏅');
+        const Ranking = Icon('📊');
+        const CheckCircle = Icon('✅');
+        const Flame = Icon('🔥');
+        const Home = Icon('🏡');
+        const Community = Icon('👥');
+        const Stats = Icon('🌎');
+        const Upload = Icon('📸');
+        const Badge = Icon('🎗️');
+        const UserIcon = Icon('🧑‍🚀');
+
+
+        // --- Data & Constants ---
+        const CHALLENGES = {
+            DAILY: [
+                { id: 1, type: 'PET', title: "투명 페트병 5개 라벨 제거 후 배출", points: 20 },
+                { id: 2, type: 'BOX', title: "택배 상자 테이프 제거 및 펼치기", points: 15 },
+                { id: 3, type: 'CAN', title: "캔 내용물 비우고 깨끗하게 헹궈 배출", points: 10 },
+            ],
+            WEEKLY: [
+                { id: 101, type: 'ALL', title: "일주일 연속 분리수거 성공 (스트릭 유지)", points: 100 },
+                { id: 102, type: 'GLASS', title: "깨진 유리류 안전하게 모아 폐기물 처리", points: 50 },
+                { id: 103, type: 'BATTERY', title: "폐건전지 10개 이상 수거함에 배출", points: 80 },
+            ]
+        };
+        const BADGES = [
+            { threshold: 50, name: "분리수거 초보 탈출", icon: "🌱" },
+            { threshold: 200, name: "플라스틱 마스터", icon: "♻️" },
+            { threshold: 500, name: "에코 챌린저", icon: "🌟" },
+        ];
+
+
+        // --- Firestore State Management ---
+
+        const initialState = {
+            isAuthReady: false,
+            userId: null,
+            db: null,
+            auth: null,
+            // User Data
+            userData: {
+                userId: null,
+                displayName: 'Loading...',
+                totalPoints: 0,
+                streak: 0,
+                lastCompletedDate: null,
+                dailyRecord: {},
+                challengeLog: [],
+                discardStats: { PET: 0, BOX: 0, CAN: 0, PLASTIC: 0, VINYL: 0, ALL: 0 },
+                badges: [],
+            },
+            // UI State
+            dailyChallenge: null,
+            weeklyChallenge: CHALLENGES.WEEKLY[0], // 주간 미션은 고정
+            globalRanking: [],
+            error: null,
+            showConfetti: false,
+        };
+
+        const reducer = (state, action) => {
+            switch (action.type) {
+                case 'SET_INIT_SUCCESS':
+                    return { ...state, isAuthReady: true, db: action.payload.db, auth: action.payload.auth, userId: action.payload.userId };
+                case 'SET_ERROR':
+                    console.error("Firestore Error:", action.payload);
+                    return { ...state, error: action.payload };
+                case 'SET_USER_DATA':
+                    // Check and assign badges
+                    const updatedBadges = BADGES
+                        .filter(b => action.payload.totalPoints >= b.threshold)
+                        .map(b => ({ name: b.name, icon: b.icon }));
+
+                    return { ...state, userData: { ...action.payload, badges: updatedBadges } };
+                case 'SET_RANKING':
+                    return { ...state, globalRanking: action.payload };
+                case 'SET_CHALLENGES':
+                    return { ...state, dailyChallenge: action.payload.daily, weeklyChallenge: action.payload.weekly };
+                case 'SHOW_CONFETTI':
+                    return { ...state, showConfetti: true };
+                case 'HIDE_CONFETTI':
+                    return { ...state, showConfetti: false };
+                default:
+                    return state;
+            }
+        };
+
+        // --- Firestore Helpers ---
+
+        const getUserProfileRef = (db, appId, userId) => {
+            return firebase.doc(db, `artifacts/${appId}/users/${userId}/data`, 'user_profile');
+        };
+
+        const getGlobalRankingRef = (db, appId, userId) => {
+            return firebase.doc(db, `artifacts/${appId}/public/data/global_ranking`, userId);
+        };
         
-        // DOM 요소 가져오기
-        const statusMessageEl = document.getElementById('status-message');
-        const userIdEl = document.getElementById('user-id');
-        const providerIdEl = document.getElementById('provider-id');
+        const getGlobalRankingCollection = (db, appId) => {
+            return firebase.collection(db, `artifacts/${appId}/public/data`, 'global_ranking');
+        };
 
-        let app;
-        let auth;
+        // --- Core Application Logic (App Component) ---
 
-        /**
-         * 상태 메시지를 업데이트합니다.
-         * @param {string} message 표시할 메시지
-         * @param {boolean} isError 오류 여부
-         */
-        function updateStatus(message, isError = false) {
-            statusMessageEl.textContent = message;
-            statusMessageEl.className = 'status-box ' + (isError ? 'error' : 'success');
-        }
+        function App() {
+            const [state, dispatch] = useReducer(reducer, initialState);
+            const [activeTab, setActiveTab] = useState('home');
 
-        /**
-         * Firebase 설정을 로드하고 초기화합니다.
-         */
-        async function initializeFirebase() {
-            try {
-                // 1. 전역 변수에서 Firebase 설정 가져오기 (오류의 주요 원인 해결)
-                // 전역 변수 __firebase_config가 정의되어 있는지 확인합니다.
-                if (typeof __firebase_config === 'undefined' || !__firebase_config) {
-                    throw new Error("전역 변수 '__firebase_config'가 정의되지 않았거나 비어 있습니다.");
-                }
-
-                const firebaseConfig = JSON.parse(__firebase_config);
-                
-                // 설정 객체가 유효한지 확인합니다.
-                if (!firebaseConfig || typeof firebaseConfig !== 'object' || !firebaseConfig.apiKey) {
-                    throw new Error("파이어베이스 설정 객체가 유효하지 않습니다. JSON.parse 오류 또는 필수 필드 누락.");
-                }
-
-                // 2. Firebase 앱 초기화
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                
-                updateStatus("✅ Firebase 앱 초기화 성공. 인증을 시도합니다...");
-
-                // 3. 인증 상태 변경 리스너 설정
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        // 인증 성공
-                        userIdEl.textContent = user.uid;
-                        providerIdEl.textContent = user.isAnonymous ? "anonymous" : (user.providerData[0]?.providerId || 'custom-token');
-                        updateStatus("✨ Firebase 초기화 및 인증 성공! User ID 확인됨.");
-                    } else {
-                        // 인증 실패 (초기 상태이거나 로그아웃됨)
-                        userIdEl.textContent = "N/A";
-                        providerIdEl.textContent = "N/A";
-                        updateStatus("⚠️ 인증 상태 변화 감지: 사용자가 로그인되어 있지 않습니다. 토큰 로그인을 시도합니다...", true);
-                        attemptAuth();
+            // 1. Firebase Initialization and Authentication
+            useEffect(() => {
+                const initFirebase = async () => {
+                    if (!window.firebase || !window.firebaseConfig.apiKey) {
+                        dispatch({ type: 'SET_ERROR', payload: "Firebase configuration is missing." });
+                        return;
                     }
+                    
+                    try {
+                        const app = window.firebase.initializeApp(window.firebaseConfig);
+                        const auth = window.firebase.getAuth(app);
+                        const db = window.firebase.getFirestore(app);
+
+                        // Authenticate user
+                        await new Promise(resolve => {
+                            const unsubscribe = window.firebase.onAuthStateChanged(auth, async (user) => {
+                                if (user) {
+                                    resolve(user.uid);
+                                } else {
+                                    // Try signing in with custom token or anonymously
+                                    try {
+                                        if (window.initialAuthToken) {
+                                            const credential = await window.firebase.signInWithCustomToken(auth, window.initialAuthToken);
+                                            resolve(credential.user.uid);
+                                        } else {
+                                            const credential = await window.firebase.signInAnonymously(auth);
+                                            resolve(credential.user.uid);
+                                        }
+                                    } catch (e) {
+                                        console.error("Authentication failed, falling back to anonymous sign-in failed:", e);
+                                        const anonId = crypto.randomUUID();
+                                        resolve(anonId);
+                                    }
+                                }
+                                if (unsubscribe) unsubscribe();
+                            });
+                        });
+                        
+                        const userId = auth.currentUser?.uid || crypto.randomUUID();
+                        
+                        dispatch({ type: 'SET_INIT_SUCCESS', payload: { db, auth, userId } });
+
+                        // Check and initialize user data if needed
+                        const profileRef = getUserProfileRef(db, window.appId, userId);
+                        const profileSnap = await window.firebase.getDoc(profileRef);
+
+                        if (!profileSnap.exists()) {
+                            // Initialize new user profile
+                            const newProfile = {
+                                ...initialState.userData,
+                                userId: userId,
+                                displayName: `EcoUser_${userId.substring(0, 4).toUpperCase()}`,
+                            };
+                            await window.firebase.setDoc(profileRef, newProfile);
+                            await window.firebase.setDoc(getGlobalRankingRef(db, window.appId, userId), { 
+                                userId: userId, 
+                                displayName: newProfile.displayName, 
+                                totalPoints: 0, 
+                                lastUpdated: new Date()
+                            });
+                        }
+                    } catch (e) {
+                        dispatch({ type: 'SET_ERROR', payload: e.message });
+                    }
+                };
+
+                initFirebase();
+            }, []);
+            
+            // 2. Data Listeners (onSnapshot)
+            useEffect(() => {
+                if (!state.isAuthReady || !state.userId || !state.db) return;
+
+                // A. User Profile Listener
+                const profileRef = getUserProfileRef(state.db, window.appId, state.userId);
+                const unsubscribeProfile = window.firebase.onSnapshot(profileRef, (doc) => {
+                    if (doc.exists()) {
+                        const data = doc.data();
+                        dispatch({ type: 'SET_USER_DATA', payload: data });
+                    }
+                }, (error) => {
+                    console.error("User Profile Snapshot Error:", error);
+                    dispatch({ type: 'SET_ERROR', payload: error.message });
                 });
 
-                // 4. 인증 시도 함수
-                async function attemptAuth() {
-                    try {
-                        // 세션 지속성 설정 (선택적이지만 권장됨)
-                        await setPersistence(auth, browserSessionPersistence);
-                        
-                        // 전역 변수 __initial_auth_token이 정의되어 있는지 확인합니다.
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            // 커스텀 토큰으로 로그인 시도
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                            updateStatus("🎉 커스텀 토큰으로 로그인 완료.");
-                        } else {
-                            // 토큰이 없으면 익명 로그인 시도
-                            await signInAnonymously(auth);
-                            updateStatus("👤 익명 로그인 완료 (초기 토큰 없음).");
-                        }
-                    } catch (authError) {
-                        updateStatus(`❌ Firebase 인증 실패: ${authError.message}`, true);
-                        console.error("Firebase 인증 오류:", authError);
+                // B. Global Ranking Listener
+                const rankingQuery = window.firebase.query(
+                    getGlobalRankingCollection(state.db, window.appId),
+                    window.firebase.orderBy('totalPoints', 'desc'),
+                    window.firebase.limit(10)
+                );
+                const unsubscribeRanking = window.firebase.onSnapshot(rankingQuery, (snapshot) => {
+                    const rankingData = snapshot.docs.map(doc => doc.data());
+                    dispatch({ type: 'SET_RANKING', payload: rankingData });
+                }, (error) => {
+                    console.error("Ranking Snapshot Error:", error);
+                });
+                
+                // C. Daily Challenge Setup
+                // Re-generate daily challenge if date changes
+                const todayKey = new Date().toDateString();
+                const storedChallenge = state.dailyChallenge || CHALLENGES.DAILY[Math.floor(Math.random() * CHALLENGES.DAILY.length)];
+                
+                if (!state.dailyChallenge) {
+                    dispatch({ type: 'SET_CHALLENGES', payload: { daily: storedChallenge, weekly: CHALLENGES.WEEKLY[0] } });
+                }
+
+                // Cleanup function
+                return () => {
+                    unsubscribeProfile();
+                    unsubscribeRanking();
+                };
+            }, [state.isAuthReady, state.userId, state.db]);
+
+            // --- Handlers ---
+
+            const handleCompleteChallenge = async (challenge, type) => {
+                if (!state.userId || !state.db || !state.userData) return;
+                const todayKey = new Date().toDateString();
+                
+                // 1. Check if already completed (Daily only)
+                if (type === 'DAILY' && state.userData.dailyRecord[todayKey]) {
+                    console.log("Daily challenge already completed today.");
+                    return;
+                }
+                
+                // 2. Update user data fields
+                const newPoints = state.userData.totalPoints + challenge.points;
+                let newStreak = state.userData.streak;
+                let newDailyRecord = { ...state.userData.dailyRecord };
+                let newDiscardStats = { ...state.userData.discardStats };
+
+                if (type === 'DAILY') {
+                    // Streak logic: Check if yesterday was completed
+                    const today = new Date();
+                    const yesterday = new Date(today);
+                    yesterday.setDate(today.getDate() - 1);
+                    const yesterdayKey = yesterday.toDateString();
+                    
+                    if (state.userData.lastCompletedDate === yesterdayKey) {
+                        newStreak = state.userData.streak + 1;
+                    } else if (state.userData.lastCompletedDate !== todayKey) {
+                        newStreak = 1; // Start new streak if not today
                     }
+                    
+                    newDailyRecord[todayKey] = true;
                 }
+                
+                // Update stats
+                newDiscardStats[challenge.type] = (newDiscardStats[challenge.type] || 0) + 1;
+                newDiscardStats['ALL'] = (newDiscardStats['ALL'] || 0) + 1;
 
-                // 최초 인증 시도 (onAuthStateChanged가 이를 트리거할 수 있지만, 명시적으로 호출)
-                // Note: onAuthStateChanged listener handles the actual UI update.
-                if (!auth.currentUser) {
-                     attemptAuth();
+                const profileRef = getUserProfileRef(state.db, window.appId, state.userId);
+                const rankingRef = getGlobalRankingRef(state.db, window.appId, state.userId);
+
+                try {
+                    // Batch updates (simulated here for simplicity, using updateDoc)
+                    await window.firebase.updateDoc(profileRef, {
+                        totalPoints: newPoints,
+                        streak: newStreak,
+                        lastCompletedDate: todayKey,
+                        dailyRecord: newDailyRecord,
+                        discardStats: newDiscardStats,
+                        challengeLog: [...state.userData.challengeLog, { 
+                            date: new Date().toISOString(), 
+                            challengeId: challenge.id, 
+                            points: challenge.points 
+                        }]
+                    });
+
+                    // Update public ranking
+                    await window.firebase.updateDoc(rankingRef, {
+                        totalPoints: newPoints,
+                        lastUpdated: new Date()
+                    });
+
+                    // UI Feedback
+                    dispatch({ type: 'SHOW_CONFETTI' });
+                    setTimeout(() => dispatch({ type: 'HIDE_CONFETTI' }), 800);
+                    
+                } catch (e) {
+                    dispatch({ type: 'SET_ERROR', payload: "미션 완료 중 오류 발생: " + e.message });
                 }
+            };
+            
+            const handleNewDailyChallenge = () => {
+                const newChallenge = CHALLENGES.DAILY[Math.floor(Math.random() * CHALLENGES.DAILY.length)];
+                dispatch({ type: 'SET_CHALLENGES', payload: { daily: newChallenge, weekly: state.weeklyChallenge } });
+                // Note: Daily challenge state is local until completed.
+            };
 
-            } catch (error) {
-                // 설정 로드 또는 초기화 중 발생한 모든 오류 처리
-                updateStatus(`❌ Firebase 초기화 오류: ${error.message}`, true);
-                console.error("초기화 프로세스 오류:", error);
 
-                // 특히 구성 오류인 경우 사용자에게 명확히 알려줍니다.
-                if (error.message.includes('__firebase_config')) {
-                    userIdEl.textContent = "Error";
-                    providerIdEl.textContent = "Error";
-                }
+            const currentLevel = Math.floor(state.userData.totalPoints / 100) + 1;
+
+            if (state.error) {
+                return <div className="p-8 text-center text-red-600 bg-red-100 min-h-screen">오류 발생: {state.error}</div>;
             }
+
+            if (!state.isAuthReady || !state.dailyChallenge) {
+                 return <div className="p-8 text-center min-h-screen flex flex-col justify-center items-center text-gray-500">
+                    <Zap className="animate-spin text-3xl mb-4" />
+                    <p className="font-bold">에코 챌린저 시스템 로딩 중...</p>
+                    <p className="text-sm mt-1">사용자 인증 및 데이터 연결 중입니다.</p>
+                </div>;
+            }
+            
+            const currentView = {
+                'home': <HomeView 
+                            state={state} 
+                            dispatch={dispatch} 
+                            handleCompleteChallenge={handleCompleteChallenge} 
+                            handleNewDailyChallenge={handleNewDailyChallenge}
+                        />,
+                'ranking': <RankingView state={state} />,
+                'stats': <StatsView state={state} />,
+                'community': <CommunityView />,
+            }[activeTab];
+
+            return (
+                <div className="bg-gray-50 min-h-screen text-gray-800 font-sans selection:bg-emerald-200">
+                    <Header 
+                        level={currentLevel} 
+                        totalPoints={state.userData.totalPoints} 
+                        displayName={state.userData.displayName}
+                        userId={state.userId}
+                    />
+                    
+                    <main className="max-w-md mx-auto h-[calc(100vh-8rem)] overflow-y-auto">
+                        {currentView}
+                    </main>
+
+                    <TabBar activeTab={activeTab} setActiveTab={setActiveTab} />
+                </div>
+            );
         }
 
-        // 페이지 로드 시 Firebase 초기화 함수 실행
-        window.onload = initializeFirebase;
+        // --- Component: Header ---
+        const Header = ({ level, totalPoints, displayName, userId }) => (
+            <header className="bg-gradient-to-r from-emerald-500 to-green-600 text-white p-4 shadow-xl sticky top-0 z-40">
+                <div className="flex justify-between items-center max-w-md mx-auto">
+                    <div className="flex flex-col items-start">
+                        <div className="text-xs opacity-80 flex items-center">
+                            <UserIcon className="w-4 h-4 mr-1 text-yellow-300" />
+                            {displayName}
+                        </div>
+                        <h1 className="text-xl font-bold">{totalPoints} P</h1>
+                        <p className="text-xs opacity-70">ID: {userId.substring(0, 10)}...</p>
+                    </div>
+                    <div className="text-right flex flex-col items-end">
+                        <div className="text-xs opacity-80">LEVEL {level}</div>
+                        <div className="font-bold text-3xl">
+                            {currentLevelToIcon(level)}
+                        </div>
+                    </div>
+                </div>
+            </header>
+        );
+
+        const currentLevelToIcon = (level) => {
+            if (level >= 5) return '👑';
+            if (level >= 3) return '🌟';
+            return '🌱';
+        };
+        
+        // --- Component: Home View ---
+        const HomeView = ({ state, handleCompleteChallenge, handleNewDailyChallenge }) => {
+            const { userData, dailyChallenge, weeklyChallenge, showConfetti } = state;
+            const todayKey = new Date().toDateString();
+            const isDailyCompleted = userData.dailyRecord[todayKey];
+            const currentLevel = Math.floor(userData.totalPoints / 100) + 1;
+
+            return (
+                <div className="p-4 space-y-4 pb-20">
+                    {/* 1. 스테이크 및 레벨 */}
+                    <div className="grid grid-cols-2 gap-4">
+                         {/* Streak */}
+                        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100 text-center">
+                            <Flame className={`w-8 h-8 mx-auto mb-1 ${userData.streak > 0 ? 'text-red-500' : 'text-gray-400'}`} />
+                            <h2 className="text-2xl font-extrabold text-gray-800">{userData.streak}일 연속</h2>
+                            <p className="text-xs text-gray-500">🔥 연속 성공</p>
+                        </div>
+                        {/* Level */}
+                        <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
+                             <h3 className="text-base font-bold text-gray-800 flex items-center mb-1">
+                                <Trophy className="w-4 h-4 mr-1 text-yellow-500" />
+                                챌린저 레벨
+                            </h3>
+                            <div className="flex justify-between items-center">
+                                <span className="text-2xl font-bold text-gray-800">LV.{currentLevel}</span>
+                                <span className="text-xs text-gray-500">+{100 - (userData.totalPoints % 100)} P</span>
+                            </div>
+                             <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+                                <div 
+                                    className="bg-yellow-500 h-2 rounded-full transition-all duration-500" 
+                                    style={{ width: `${(userData.totalPoints % 100)}%` }}
+                                ></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 2. 오늘의 미션 */}
+                    <ChallengeCard 
+                        challenge={dailyChallenge}
+                        type="DAILY"
+                        isCompleted={isDailyCompleted}
+                        handleComplete={() => handleCompleteChallenge(dailyChallenge, 'DAILY')}
+                        handleNewChallenge={handleNewDailyChallenge}
+                        showConfetti={showConfetti}
+                    />
+
+                     {/* 3. 주간 미션 (Weekly) */}
+                    <ChallengeCard 
+                        challenge={weeklyChallenge}
+                        type="WEEKLY"
+                        isCompleted={userData.streak >= 7} // 주간 미션: 7일 스트릭 성공으로 가정
+                        handleComplete={() => handleCompleteChallenge(weeklyChallenge, 'WEEKLY')}
+                        showConfetti={false}
+                    />
+                </div>
+            );
+        };
+        
+        // --- Component: Reusable Challenge Card ---
+        const ChallengeCard = ({ challenge, type, isCompleted, handleComplete, handleNewChallenge, showConfetti }) => (
+            <div className="bg-white border-2 border-blue-200 rounded-3xl p-6 shadow-lg relative overflow-hidden">
+                {showConfetti && (
+                    <div className="absolute inset-0 z-20 overflow-hidden pointer-events-none">
+                        {[...Array(10)].map((_, i) => (
+                            <div key={i} className="absolute w-2 h-2 rounded-full animate-confetti" 
+                                style={{ 
+                                    left: `${Math.random() * 100}%`, 
+                                    top: `${Math.random() * 100}%`, 
+                                    backgroundColor: ['#f00', '#0f0', '#00f', '#ff0', '#0ff'][i % 5],
+                                    animationDelay: `${i * 0.1}s`,
+                                }}
+                            />
+                        ))}
+                    </div>
+                )}
+                <h3 className={`text-lg font-bold flex items-center mb-2 ${type === 'DAILY' ? 'text-blue-800' : 'text-purple-800'}`}>
+                    <Target className="w-5 h-5 mr-2 text-blue-500" />
+                    {type === 'DAILY' ? `오늘의 미션 (${challenge.points} P)` : `주간 챌린지 (${challenge.points} P)`}
+                </h3>
+                <p className="text-xl font-extrabold text-gray-800 leading-snug mb-5">
+                    {challenge.title}
+                </p>
+                
+                {!isCompleted ? (
+                    <button
+                        onClick={handleComplete}
+                        className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition active:scale-95 flex items-center justify-center relative z-30"
+                    >
+                        <Upload className="w-6 h-6 mr-2" />
+                        분리수거 인증 사진 업로드 (미션 완료)
+                    </button>
+                ) : (
+                    <div className="w-full bg-green-500 text-white py-4 rounded-xl font-bold text-center flex items-center justify-center">
+                        <CheckCircle className="w-6 h-6 mr-2" />
+                        {type === 'DAILY' ? '오늘의 미션 완료!' : '주간 챌린지 성공!'}
+                    </div>
+                )}
+                {(type === 'DAILY' && !isCompleted) && (
+                    <button 
+                        onClick={handleNewChallenge} 
+                        className="w-full mt-2 text-sm text-gray-500 hover:text-gray-700 transition"
+                    >
+                        다른 미션으로 변경
+                    </button>
+                 )}
+            </div>
+        );
+
+
+        // --- Component: Ranking View ---
+        const RankingView = ({ state }) => {
+            const { globalRanking, userId } = state;
+            
+            return (
+                <div className="p-4 space-y-4 pb-20">
+                    <h2 className="text-2xl font-bold text-gray-800 flex items-center">
+                        <Ranking className="w-6 h-6 mr-2 text-blue-500" /> 
+                        챌린저 랭킹 (Top 10)
+                    </h2>
+                    <p className="text-sm text-gray-500">친구와 동네 사람들의 실시간 랭킹입니다. (총 포인트 기준)</p>
+                    
+                    <div className="bg-white rounded-xl shadow-md divide-y divide-gray-100">
+                        {globalRanking.length === 0 && <p className="p-4 text-center text-gray-400">랭킹 데이터를 불러오는 중...</p>}
+                        {globalRanking.map((ranker, index) => (
+                            <div key={ranker.userId} className={`flex justify-between items-center p-4 ${ranker.userId === userId ? 'bg-yellow-50 border-l-4 border-yellow-500 font-bold' : ''}`}>
+                                <div className="flex items-center space-x-3">
+                                    <span className={`text-lg font-extrabold w-6 text-center ${index < 3 ? 'text-red-500' : 'text-gray-500'}`}>
+                                        {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`}
+                                    </span>
+                                    <span className="text-gray-800">{ranker.displayName}</span>
+                                </div>
+                                <span className="text-green-600 font-bold">{ranker.totalPoints} P</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+        
+        // --- Component: Stats View (Environmental Contribution) ---
+        const StatsView = ({ state }) => {
+            const { userData } = state;
+            const totalRecycledCount = userData.discardStats.ALL || 0;
+            const treeGrowthPercentage = Math.min(100, (totalRecycledCount * 5)); // 20회 성공 시 100% 성장
+            const treeLevel = Math.floor(treeGrowthPercentage / 20); // 5단계 나무 성장
+
+            // Stats for chart
+            const stats = Object.entries(userData.discardStats)
+                .filter(([key]) => key !== 'ALL')
+                .map(([type, count]) => ({ type, count }))
+                .sort((a, b) => b.count - a.count);
+
+            const mostDiscarded = stats.length > 0 ? stats[0].type : 'N/A';
+            const mostDiscardedCount = stats.length > 0 ? stats[0].count : 0;
+            
+            const mapTypeToLabel = (type) => ({ PET: '페트병', BOX: '종이상자', CAN: '캔', PLASTIC: '플라스틱', VINYL: '비닐' })[type] || type;
+
+            return (
+                <div className="p-4 space-y-6 pb-20">
+                    <h2 className="text-2xl font-bold text-gray-800 flex items-center">
+                        <Stats className="w-6 h-6 mr-2 text-green-500" /> 
+                        나의 환경 기여도
+                    </h2>
+
+                    {/* Tree Visualization */}
+                    <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100 text-center">
+                        <h3 className="text-xl font-bold text-gray-700 mb-4">
+                            나만의 에코 나무 키우기 (Level {treeLevel})
+                        </h3>
+                        <div className="tree-container my-6">
+                            <div className="tree-base"></div>
+                            <div 
+                                className="tree-leaves" 
+                                style={{ 
+                                    width: `${30 + treeGrowthPercentage * 0.7}px`, 
+                                    height: `${30 + treeGrowthPercentage * 0.7}px`, 
+                                    background: treeGrowthPercentage > 0 ? '#38A169' : '#ccc',
+                                    transform: `translate(-50%, -50%) scale(${treeGrowthPercentage / 100})`,
+                                    top: `${50 - (treeGrowthPercentage / 4)}%`
+                                }}
+                            ></div>
+                        </div>
+                        <p className="text-lg font-semibold text-green-600 mt-4">
+                            총 {totalRecycledCount}회 분리배출 성공
+                        </p>
+                        <p className="text-sm text-gray-500">
+                            이는 나무 약 **{treeLevel}그루**를 키운 효과와 같습니다!
+                        </p>
+                    </div>
+
+                    {/* Badges */}
+                    <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
+                        <h3 className="text-xl font-bold text-gray-700 flex items-center mb-3">
+                            <Badge className="w-5 h-5 mr-2 text-yellow-500" />
+                            획득한 뱃지 ({userData.badges.length})
+                        </h3>
+                        <div className="flex flex-wrap gap-2">
+                            {userData.badges.map(b => (
+                                <div key={b.name} className="flex items-center bg-yellow-100 text-yellow-800 text-sm font-medium px-3 py-1.5 rounded-full shadow-sm">
+                                    {b.icon} {b.name}
+                                </div>
+                            ))}
+                            {userData.badges.length === 0 && <p className="text-sm text-gray-400">아직 획득한 뱃지가 없습니다. 포인트를 모아보세요!</p>}
+                        </div>
+                    </div>
+
+                    {/* Stats Chart (Simplified) */}
+                    <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
+                        <h3 className="text-xl font-bold text-gray-700 flex items-center mb-4">
+                            <i className="fas fa-chart-bar mr-2"></i>
+                            나의 분리수거 통계
+                        </h3>
+                        <p className="text-lg font-semibold mb-3">
+                            가장 많이 버린 유형: <span className="text-blue-600">{mapTypeToLabel(mostDiscarded)} ({mostDiscardedCount}회)</span>
+                        </p>
+                        <div className="space-y-2">
+                            {stats.slice(0, 5).map(({ type, count }) => (
+                                <div key={type} className="flex items-center">
+                                    <span className="w-20 text-sm text-gray-600">{mapTypeToLabel(type)}</span>
+                                    <div className="flex-1 bg-gray-200 rounded-full h-3">
+                                        <div 
+                                            className="bg-blue-400 h-3 rounded-full" 
+                                            style={{ width: `${Math.max(10, (count / mostDiscardedCount) * 100)}%` }}
+                                        ></div>
+                                    </div>
+                                    <span className="ml-2 text-sm text-gray-600">{count}회</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        // --- Component: Community View (Placeholder) ---
+        const CommunityView = () => (
+            <div className="p-8 text-center pt-20">
+                <Community className="text-6xl text-gray-300 mb-4" />
+                <h2 className="text-xl font-bold text-gray-700">커뮤니티 (준비 중)</h2>
+                <p className="text-sm text-gray-500 mt-2">
+                    친구들과 그룹을 만들거나, 동네별 챌린지를 시작할 수 있는 기능이 곧 추가될 예정입니다!
+                </p>
+            </div>
+        );
+
+
+        // --- Component: TabBar ---
+        const TabBar = ({ activeTab, setActiveTab }) => {
+            const tabs = [
+                { id: 'home', icon: Home, label: '미션' },
+                { id: 'ranking', icon: Ranking, label: '랭킹' },
+                { id: 'stats', icon: Stats, label: '기여도' },
+                { id: 'community', icon: Community, label: '커뮤니티' },
+            ];
+
+            return (
+                <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 pb-safe z-40">
+                    <div className="flex justify-around items-center max-w-md mx-auto h-16">
+                        {tabs.map((tab) => {
+                            const Icon = tab.icon;
+                            const isActive = tab.id === activeTab;
+                            return (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition ${
+                                        isActive ? 'text-emerald-600' : 'text-gray-400 hover:text-gray-600'
+                                    }`}
+                                >
+                                    <Icon className={`w-6 h-6 transition-transform ${isActive ? 'scale-110' : ''}`} />
+                                    <span className="text-xs font-medium">{tab.label}</span>
+                                </button>
+                            );
+                        })}
+                    </div>
+                </nav>
+            );
+        };
+
+
+        // --- Render App ---
+        // Wait for the Firebase global variables to be defined by the module script
+        window.onload = () => {
+             const container = document.getElementById('root');
+             if (container) {
+                const root = ReactDOM.createRoot(container);
+                root.render(<App />);
+             } else {
+                 console.error("Root container not found.");
+             }
+        };
+
     </script>
 </body>
 </html>
