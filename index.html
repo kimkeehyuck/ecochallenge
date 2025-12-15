@@ -11,26 +11,6 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Firebase SDK (Must be V11+) -->
-    <script type="module">
-        import { initializeApp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, limit, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        
-        window.firebase = { 
-            initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, 
-            getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, query, limit, orderBy,
-            setLogLevel 
-        };
-        window.firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        window.initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        
-        if (typeof crypto.randomUUID === 'undefined') {
-            crypto.randomUUID = () => 'anon-' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
-        }
-    </script>
-
     <style>
         .pb-safe {
             padding-bottom: constant(safe-area-inset-bottom);
@@ -78,7 +58,6 @@
         const { useState, useEffect, useReducer } = React;
 
         // --- Helper: Get Week ID (ISO Week) ---
-        // 주차별 고유 ID를 생성합니다 (예: "2025-W12")
         const getWeekId = () => {
             const d = new Date();
             d.setHours(0,0,0,0);
@@ -87,6 +66,16 @@
             const weekNo = Math.ceil(( ( (d - yearStart) / 86400000) + 1)/7);
             return `${d.getFullYear()}-W${weekNo}`;
         };
+
+        // --- Mock Data: 가상 랭킹 경쟁자들 ---
+        const MOCK_RANKERS = [
+            { userId: 'bot1', displayName: '지구지킴이1호', totalPoints: 1250 },
+            { userId: 'bot2', displayName: '플라스틱ZERO', totalPoints: 980 },
+            { userId: 'bot3', displayName: '북극곰아미안해', totalPoints: 850 },
+            { userId: 'bot4', displayName: '에코라이프', totalPoints: 620 },
+            { userId: 'bot5', displayName: '분리수거왕', totalPoints: 450 },
+            { userId: 'bot6', displayName: 'CleanCity', totalPoints: 300 },
+        ];
 
         // --- Icon Mockup (Emoji) ---
         const Icon = (emoji) => ({ className, ...props }) => (
@@ -106,7 +95,6 @@
         const Badge = Icon('🎗️');
         const UserIcon = Icon('🧑‍🚀');
 
-
         // --- Data & Constants ---
         const CHALLENGES = {
             DAILY: [
@@ -114,7 +102,6 @@
                 { id: 2, type: 'BOX', title: "택배 상자 테이프 제거 및 펼치기", points: 15 },
                 { id: 3, type: 'CAN', title: "캔 내용물 비우고 깨끗하게 헹궈 배출", points: 10 },
             ],
-            // 주간 미션 내용을 '사진 인증'이 가능한 내용으로 변경
             WEEKLY: [
                 { id: 101, type: 'BATTERY', title: "폐건전지/형광등 전용 수거함 배출하기", points: 100 },
                 { id: 102, type: 'GLASS', title: "깨진 유리류 안전하게 밀봉하여 배출", points: 100 },
@@ -127,59 +114,56 @@
             { threshold: 500, name: "에코 챌린저", icon: "🌟" },
         ];
 
-
-        // --- Firestore State Management ---
-
-        const initialState = {
-            isAuthReady: false,
-            userId: null,
-            db: null,
-            auth: null,
-            // User Data
-            userData: {
-                userId: null,
-                displayName: 'Loading...',
+        // --- Local Storage Manager (Firebase 대체) ---
+        const DB_KEY = 'eco_challenger_pro_data';
+        
+        const loadUserData = () => {
+            const stored = localStorage.getItem(DB_KEY);
+            if (stored) return JSON.parse(stored);
+            
+            // 초기 데이터 생성
+            const initialData = {
+                userId: 'user_' + Math.random().toString(36).substr(2, 9),
+                displayName: '나의 닉네임',
                 totalPoints: 0,
                 streak: 0,
                 lastCompletedDate: null,
                 dailyRecord: {},
-                weeklyRecord: {}, // 주간 기록 추가
+                weeklyRecord: {},
                 challengeLog: [],
                 discardStats: { PET: 0, BOX: 0, CAN: 0, PLASTIC: 0, VINYL: 0, ALL: 0 },
                 badges: [],
-            },
-            // UI State
+            };
+            localStorage.setItem(DB_KEY, JSON.stringify(initialData));
+            return initialData;
+        };
+
+        const saveUserData = (data) => {
+            localStorage.setItem(DB_KEY, JSON.stringify(data));
+        };
+
+        // --- State Management ---
+        const initialState = {
+            isLoading: true,
+            userData: null,
             dailyChallenge: null,
             weeklyChallenge: CHALLENGES.WEEKLY[0],
             globalRanking: [],
-            error: null,
             showConfetti: false,
         };
 
         const reducer = (state, action) => {
             switch (action.type) {
-                case 'SET_INIT_SUCCESS':
-                    return { ...state, isAuthReady: true, db: action.payload.db, auth: action.payload.auth, userId: action.payload.userId };
-                case 'SET_ERROR':
-                    console.error("Firestore Error:", action.payload);
-                    return { ...state, error: action.payload };
-                case 'SET_USER_DATA':
-                    const updatedBadges = BADGES
-                        .filter(b => action.payload.totalPoints >= b.threshold)
-                        .map(b => ({ name: b.name, icon: b.icon }));
-
-                    // weeklyRecord가 없는 구버전 데이터를 위한 방어 코드
-                    const safeUserData = {
-                        ...action.payload,
-                        weeklyRecord: action.payload.weeklyRecord || {},
-                        badges: updatedBadges
-                    };
-
-                    return { ...state, userData: safeUserData };
-                case 'SET_RANKING':
-                    return { ...state, globalRanking: action.payload };
-                case 'SET_CHALLENGES':
-                    return { ...state, dailyChallenge: action.payload.daily, weeklyChallenge: action.payload.weekly };
+                case 'INIT_SUCCESS':
+                    return { ...state, isLoading: false, userData: action.payload.userData, globalRanking: action.payload.ranking };
+                case 'UPDATE_USER':
+                     // 랭킹 업데이트 로직 포함
+                    const updatedRanking = [...MOCK_RANKERS, action.payload]
+                        .sort((a, b) => b.totalPoints - a.totalPoints)
+                        .slice(0, 10);
+                    return { ...state, userData: action.payload, globalRanking: updatedRanking };
+                case 'SET_CHALLENGE':
+                    return { ...state, dailyChallenge: action.payload };
                 case 'SHOW_CONFETTI':
                     return { ...state, showConfetti: true };
                 case 'HIDE_CONFETTI':
@@ -189,235 +173,132 @@
             }
         };
 
-        const getUserProfileRef = (db, appId, userId) => {
-            return firebase.doc(db, `artifacts/${appId}/users/${userId}/data`, 'user_profile');
-        };
-
-        const getGlobalRankingRef = (db, appId, userId) => {
-            return firebase.doc(db, `artifacts/${appId}/public/data/global_ranking`, userId);
-        };
-        
-        const getGlobalRankingCollection = (db, appId) => {
-            return firebase.collection(db, `artifacts/${appId}/public/data`, 'global_ranking');
-        };
-
-        // --- Core Application Logic (App Component) ---
-
+        // --- App Component ---
         function App() {
             const [state, dispatch] = useReducer(reducer, initialState);
             const [activeTab, setActiveTab] = useState('home');
 
+            // 1. 초기화 (데이터 로드)
             useEffect(() => {
-                const initFirebase = async () => {
-                    if (!window.firebase || !window.firebaseConfig.apiKey) {
-                        dispatch({ type: 'SET_ERROR', payload: "Firebase configuration is missing." });
-                        return;
-                    }
+                // 실제 서버 로딩처럼 살짝 지연 효과
+                setTimeout(() => {
+                    const userData = loadUserData();
                     
-                    try {
-                        const app = window.firebase.initializeApp(window.firebaseConfig);
-                        const auth = window.firebase.getAuth(app);
-                        const db = window.firebase.getFirestore(app);
-                        
-                        if (window.firebase.setLogLevel) {
-                            window.firebase.setLogLevel('debug');
-                        }
-
-                        await new Promise(resolve => {
-                            const unsubscribe = window.firebase.onAuthStateChanged(auth, async (user) => {
-                                if (user) {
-                                    resolve(user.uid);
-                                } else {
-                                    try {
-                                        if (window.initialAuthToken) {
-                                            const credential = await window.firebase.signInWithCustomToken(auth, window.initialAuthToken);
-                                            resolve(credential.user.uid);
-                                        } else {
-                                            const credential = await window.firebase.signInAnonymously(auth);
-                                            resolve(credential.user.uid);
-                                        }
-                                    } catch (e) {
-                                        console.error("Authentication failed:", e);
-                                        const anonId = crypto.randomUUID();
-                                        resolve(anonId);
-                                    }
-                                }
-                                if (unsubscribe) unsubscribe();
-                            });
-                        });
-                        
-                        const userId = auth.currentUser?.uid || crypto.randomUUID();
-                        
-                        dispatch({ type: 'SET_INIT_SUCCESS', payload: { db, auth, userId } });
-
-                        const profileRef = getUserProfileRef(db, window.appId, userId);
-                        const profileSnap = await window.firebase.getDoc(profileRef);
-
-                        if (!profileSnap.exists()) {
-                            const newProfile = {
-                                ...initialState.userData,
-                                userId: userId,
-                                displayName: `EcoUser_${userId.substring(0, 4).toUpperCase()}`,
-                            };
-                            await window.firebase.setDoc(profileRef, newProfile);
-                            await window.firebase.setDoc(getGlobalRankingRef(db, window.appId, userId), { 
-                                userId: userId, 
-                                displayName: newProfile.displayName, 
-                                totalPoints: 0, 
-                                lastUpdated: new Date()
-                            });
-                        }
-                    } catch (e) {
-                        dispatch({ type: 'SET_ERROR', payload: e.message });
+                    // 뱃지 업데이트 확인
+                    const currentBadges = userData.badges || [];
+                    const earnedBadges = BADGES.filter(b => userData.totalPoints >= b.threshold);
+                    
+                    if (earnedBadges.length > currentBadges.length) {
+                        userData.badges = earnedBadges.map(b => ({ name: b.name, icon: b.icon }));
+                        saveUserData(userData);
                     }
-                };
 
-                initFirebase();
+                    // 랭킹 생성 (내 점수 포함)
+                    const ranking = [...MOCK_RANKERS, userData]
+                        .sort((a, b) => b.totalPoints - a.totalPoints)
+                        .slice(0, 10);
+
+                    // 챌린지 설정
+                    const todayKey = new Date().toDateString();
+                    // 로컬스토리지에 저장된 챌린지가 없거나 날짜가 다르면 새로 생성
+                    let storedChallenge = localStorage.getItem('eco_daily_challenge');
+                    let parsedChallenge = storedChallenge ? JSON.parse(storedChallenge) : null;
+                    
+                    if (!parsedChallenge || parsedChallenge.date !== todayKey) {
+                        const newChallenge = CHALLENGES.DAILY[Math.floor(Math.random() * CHALLENGES.DAILY.length)];
+                        parsedChallenge = { date: todayKey, challenge: newChallenge };
+                        localStorage.setItem('eco_daily_challenge', JSON.stringify(parsedChallenge));
+                    }
+
+                    dispatch({ type: 'SET_CHALLENGE', payload: parsedChallenge.challenge });
+                    dispatch({ type: 'INIT_SUCCESS', payload: { userData, ranking } });
+                }, 800);
             }, []);
-            
-            useEffect(() => {
-                if (!state.isAuthReady || !state.userId || !state.db) return;
 
-                const profileRef = getUserProfileRef(state.db, window.appId, state.userId);
-                const unsubscribeProfile = window.firebase.onSnapshot(profileRef, (doc) => {
-                    if (doc.exists()) {
-                        const data = doc.data();
-                        dispatch({ type: 'SET_USER_DATA', payload: data });
-                    }
-                }, (error) => {
-                    console.error("User Profile Snapshot Error:", error);
-                });
-
-                const rankingQuery = window.firebase.query(
-                    getGlobalRankingCollection(state.db, window.appId),
-                    window.firebase.limit(50)
-                );
-                const unsubscribeRanking = window.firebase.onSnapshot(rankingQuery, (snapshot) => {
-                    let rankingData = snapshot.docs.map(doc => doc.data());
-                    rankingData.sort((a, b) => b.totalPoints - a.totalPoints);
-                    dispatch({ type: 'SET_RANKING', payload: rankingData.slice(0, 10) }); 
-                }, (error) => {
-                    console.error("Ranking Snapshot Error:", error);
-                });
-                
+            // 2. 미션 완료 핸들러
+            const handleCompleteChallenge = (challenge, type) => {
+                const { userData } = state;
                 const todayKey = new Date().toDateString();
-                const storedChallenge = state.dailyChallenge || CHALLENGES.DAILY[Math.floor(Math.random() * CHALLENGES.DAILY.length)];
-                
-                if (!state.dailyChallenge) {
-                    dispatch({ type: 'SET_CHALLENGES', payload: { daily: storedChallenge, weekly: CHALLENGES.WEEKLY[0] } });
-                }
+                const weekKey = getWeekId();
 
-                return () => {
-                    unsubscribeProfile();
-                    unsubscribeRanking();
-                };
-            }, [state.isAuthReady, state.userId, state.db]);
+                // 중복 체크
+                if (type === 'DAILY' && userData.dailyRecord[todayKey]) return;
+                if (type === 'WEEKLY' && userData.weeklyRecord && userData.weeklyRecord[weekKey]) return;
 
-            // --- Handlers ---
-
-            const handleCompleteChallenge = async (challenge, type) => {
-                if (!state.userId || !state.db || !state.userData) return;
-                
-                const todayKey = new Date().toDateString();
-                const weekKey = getWeekId(); // 이번 주 ID 가져오기
-
-                // 1. 중복 완료 체크 (Daily & Weekly 모두 적용)
-                if (type === 'DAILY' && state.userData.dailyRecord[todayKey]) {
-                    console.log("Daily challenge already completed today.");
-                    return;
-                }
-                if (type === 'WEEKLY' && state.userData.weeklyRecord && state.userData.weeklyRecord[weekKey]) {
-                    console.log("Weekly challenge already completed this week.");
-                    return;
-                }
-                
-                // 2. Update Data
-                const newPoints = state.userData.totalPoints + challenge.points;
-                let newStreak = state.userData.streak;
-                let newDailyRecord = { ...state.userData.dailyRecord };
-                let newWeeklyRecord = { ...(state.userData.weeklyRecord || {}) }; // 주간 기록 복사
-                let newDiscardStats = { ...state.userData.discardStats };
+                // 데이터 업데이트
+                const newPoints = userData.totalPoints + challenge.points;
+                let newStreak = userData.streak;
+                let newDailyRecord = { ...userData.dailyRecord };
+                let newWeeklyRecord = { ...(userData.weeklyRecord || {}) };
+                let newDiscardStats = { ...userData.discardStats };
 
                 if (type === 'DAILY') {
                     const today = new Date();
                     const yesterday = new Date(today);
                     yesterday.setDate(today.getDate() - 1);
                     const yesterdayKey = yesterday.toDateString();
-                    
-                    if (state.userData.lastCompletedDate === yesterdayKey) {
-                        newStreak = state.userData.streak + 1;
-                    } else if (state.userData.lastCompletedDate !== todayKey) {
+
+                    if (userData.lastCompletedDate === yesterdayKey) {
+                        newStreak += 1;
+                    } else if (userData.lastCompletedDate !== todayKey) {
                         newStreak = 1;
                     }
                     newDailyRecord[todayKey] = true;
                 }
 
                 if (type === 'WEEKLY') {
-                    newWeeklyRecord[weekKey] = true; // 주간 완료 기록 저장
+                    newWeeklyRecord[weekKey] = true;
                 }
-                
+
                 newDiscardStats[challenge.type] = (newDiscardStats[challenge.type] || 0) + 1;
                 newDiscardStats['ALL'] = (newDiscardStats['ALL'] || 0) + 1;
 
-                const profileRef = getUserProfileRef(state.db, window.appId, state.userId);
-                const rankingRef = getGlobalRankingRef(state.db, window.appId, state.userId);
+                const updatedUser = {
+                    ...userData,
+                    totalPoints: newPoints,
+                    streak: newStreak,
+                    lastCompletedDate: todayKey,
+                    dailyRecord: newDailyRecord,
+                    weeklyRecord: newWeeklyRecord,
+                    discardStats: newDiscardStats,
+                    challengeLog: [...userData.challengeLog, {
+                        date: new Date().toISOString(),
+                        challengeId: challenge.id,
+                        points: challenge.points,
+                        type
+                    }]
+                };
 
-                try {
-                    // Update User Profile
-                    await window.firebase.setDoc(profileRef, {
-                        totalPoints: newPoints,
-                        streak: newStreak,
-                        lastCompletedDate: todayKey,
-                        dailyRecord: newDailyRecord,
-                        weeklyRecord: newWeeklyRecord, // 주간 기록 저장
-                        discardStats: newDiscardStats,
-                        challengeLog: [...state.userData.challengeLog, { 
-                            date: new Date().toISOString(), 
-                            challengeId: challenge.id, 
-                            points: challenge.points,
-                            type: type
-                        }]
-                    }, { merge: true });
-
-                    // Update Public Ranking
-                    await window.firebase.setDoc(rankingRef, {
-                        totalPoints: newPoints,
-                        displayName: state.userData.displayName,
-                        lastUpdated: new Date()
-                    }, { merge: true });
-
-                    dispatch({ type: 'SHOW_CONFETTI' });
-                    setTimeout(() => dispatch({ type: 'HIDE_CONFETTI' }), 800);
-                    
-                } catch (e) {
-                    dispatch({ type: 'SET_ERROR', payload: "미션 완료 중 오류 발생: " + e.message });
-                }
+                // 저장 및 상태 업데이트
+                saveUserData(updatedUser);
+                dispatch({ type: 'UPDATE_USER', payload: updatedUser });
+                
+                // 폭죽 효과
+                dispatch({ type: 'SHOW_CONFETTI' });
+                setTimeout(() => dispatch({ type: 'HIDE_CONFETTI' }), 800);
             };
-            
+
             const handleNewDailyChallenge = () => {
                 const newChallenge = CHALLENGES.DAILY[Math.floor(Math.random() * CHALLENGES.DAILY.length)];
-                dispatch({ type: 'SET_CHALLENGES', payload: { daily: newChallenge, weekly: state.weeklyChallenge } });
+                const todayKey = new Date().toDateString();
+                localStorage.setItem('eco_daily_challenge', JSON.stringify({ date: todayKey, challenge: newChallenge }));
+                dispatch({ type: 'SET_CHALLENGE', payload: newChallenge });
             };
 
+            if (state.isLoading) {
+                 return (
+                    <div className="min-h-screen flex flex-col justify-center items-center bg-gray-50 text-gray-500">
+                        <Zap className="animate-spin text-4xl mb-4 text-emerald-500" />
+                        <p className="font-bold text-lg">에코 챌린저 로딩 중...</p>
+                    </div>
+                 );
+            }
 
             const currentLevel = Math.floor(state.userData.totalPoints / 100) + 1;
-
-            if (state.error) {
-                return <div className="p-8 text-center text-red-600 bg-red-100 min-h-screen">오류 발생: {state.error}</div>;
-            }
-
-            if (!state.isAuthReady || !state.dailyChallenge) {
-                 return <div className="p-8 text-center min-h-screen flex flex-col justify-center items-center text-gray-500">
-                    <Zap className="animate-spin text-3xl mb-4" />
-                    <p className="font-bold">에코 챌린저 시스템 로딩 중...</p>
-                    <p className="text-sm mt-1">사용자 인증 및 데이터 연결 중입니다.</p>
-                </div>;
-            }
             
             const currentView = {
                 'home': <HomeView 
                             state={state} 
-                            dispatch={dispatch} 
                             handleCompleteChallenge={handleCompleteChallenge} 
                             handleNewDailyChallenge={handleNewDailyChallenge}
                         />,
@@ -428,23 +309,17 @@
 
             return (
                 <div className="bg-gray-50 min-h-screen text-gray-800 font-sans selection:bg-emerald-200">
-                    <Header 
-                        level={currentLevel} 
-                        totalPoints={state.userData.totalPoints} 
-                        displayName={state.userData.displayName}
-                        userId={state.userId}
-                    />
-                    
+                    <Header level={currentLevel} totalPoints={state.userData.totalPoints} displayName={state.userData.displayName} />
                     <main className="max-w-md mx-auto h-[calc(100vh-8rem)] overflow-y-auto">
                         {currentView}
                     </main>
-
                     <TabBar activeTab={activeTab} setActiveTab={setActiveTab} />
                 </div>
             );
         }
 
-        const Header = ({ level, totalPoints, displayName, userId }) => (
+        // --- Sub Components ---
+        const Header = ({ level, totalPoints, displayName }) => (
             <header className="bg-gradient-to-r from-emerald-500 to-green-600 text-white p-4 shadow-xl sticky top-0 z-40">
                 <div className="flex justify-between items-center max-w-md mx-auto">
                     <div className="flex flex-col items-start">
@@ -453,32 +328,21 @@
                             {displayName}
                         </div>
                         <h1 className="text-xl font-bold">{totalPoints} P</h1>
-                        <p className="text-xs opacity-70">ID: {userId.substring(0, 10)}...</p>
                     </div>
                     <div className="text-right flex flex-col items-end">
                         <div className="text-xs opacity-80">LEVEL {level}</div>
-                        <div className="font-bold text-3xl">
-                            {currentLevelToIcon(level)}
-                        </div>
+                        <div className="font-bold text-3xl">{level >= 5 ? '👑' : level >= 3 ? '🌟' : '🌱'}</div>
                     </div>
                 </div>
             </header>
         );
 
-        const currentLevelToIcon = (level) => {
-            if (level >= 5) return '👑';
-            if (level >= 3) return '🌟';
-            return '🌱';
-        };
-        
         const HomeView = ({ state, handleCompleteChallenge, handleNewDailyChallenge }) => {
             const { userData, dailyChallenge, weeklyChallenge, showConfetti } = state;
             const todayKey = new Date().toDateString();
             const weekKey = getWeekId();
-            
             const isDailyCompleted = userData.dailyRecord[todayKey];
             const isWeeklyCompleted = userData.weeklyRecord ? userData.weeklyRecord[weekKey] : false;
-            
             const currentLevel = Math.floor(userData.totalPoints / 100) + 1;
 
             return (
@@ -492,17 +356,14 @@
                         <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                              <h3 className="text-base font-bold text-gray-800 flex items-center mb-1">
                                 <Trophy className="w-4 h-4 mr-1 text-yellow-500" />
-                                챌린저 레벨
+                                레벨
                             </h3>
                             <div className="flex justify-between items-center">
                                 <span className="text-2xl font-bold text-gray-800">LV.{currentLevel}</span>
                                 <span className="text-xs text-gray-500">+{100 - (userData.totalPoints % 100)} P</span>
                             </div>
                              <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
-                                <div 
-                                    className="bg-yellow-500 h-2 rounded-full transition-all duration-500" 
-                                    style={{ width: `${(userData.totalPoints % 100)}%` }}
-                                ></div>
+                                <div className="bg-yellow-500 h-2 rounded-full transition-all duration-500" style={{ width: `${(userData.totalPoints % 100)}%` }}></div>
                             </div>
                         </div>
                     </div>
@@ -526,19 +387,14 @@
                 </div>
             );
         };
-        
+
         const ChallengeCard = ({ challenge, type, isCompleted, handleComplete, handleNewChallenge, showConfetti }) => (
             <div className="bg-white border-2 border-blue-200 rounded-3xl p-6 shadow-lg relative overflow-hidden">
                 {showConfetti && (
                     <div className="absolute inset-0 z-20 overflow-hidden pointer-events-none">
                         {[...Array(10)].map((_, i) => (
                             <div key={i} className="absolute w-2 h-2 rounded-full animate-confetti" 
-                                style={{ 
-                                    left: `${Math.random() * 100}%`, 
-                                    top: `${Math.random() * 100}%`, 
-                                    backgroundColor: ['#f00', '#0f0', '#00f', '#ff0', '#0ff'][i % 5],
-                                    animationDelay: `${i * 0.1}s`,
-                                }}
+                                style={{ left: `${Math.random() * 100}%`, top: `${Math.random() * 100}%`, backgroundColor: ['#f00', '#0f0', '#00f', '#ff0', '#0ff'][i % 5], animationDelay: `${i * 0.1}s` }}
                             />
                         ))}
                     </div>
@@ -547,56 +403,42 @@
                     <Target className="w-5 h-5 mr-2 text-blue-500" />
                     {type === 'DAILY' ? `오늘의 미션 (${challenge.points} P)` : `주간 특별 미션 (${challenge.points} P)`}
                 </h3>
-                <p className="text-xl font-extrabold text-gray-800 leading-snug mb-5">
-                    {challenge.title}
-                </p>
+                <p className="text-xl font-extrabold text-gray-800 leading-snug mb-5">{challenge.title}</p>
                 
                 {!isCompleted ? (
-                    <button
-                        onClick={handleComplete}
-                        className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition active:scale-95 flex items-center justify-center relative z-30"
-                    >
+                    <button onClick={handleComplete} className="w-full bg-emerald-600 text-white py-4 rounded-xl font-bold shadow-lg hover:bg-emerald-700 transition active:scale-95 flex items-center justify-center relative z-30">
                         <Upload className="w-6 h-6 mr-2" />
-                        분리수거 인증 사진 업로드 (미션 완료)
+                        분리수거 인증 사진 업로드
                     </button>
                 ) : (
                     <div className="w-full bg-green-500 text-white py-4 rounded-xl font-bold text-center flex items-center justify-center">
                         <CheckCircle className="w-6 h-6 mr-2" />
-                        {type === 'DAILY' ? '오늘의 미션 완료!' : '이번 주 미션 완료!'}
+                        미션 완료!
                     </div>
                 )}
                 {(type === 'DAILY' && !isCompleted) && (
-                    <button 
-                        onClick={handleNewChallenge} 
-                        className="w-full mt-2 text-sm text-gray-500 hover:text-gray-700 transition"
-                    >
-                        다른 미션으로 변경
-                    </button>
+                    <button onClick={handleNewChallenge} className="w-full mt-2 text-sm text-gray-500 hover:text-gray-700 transition">다른 미션으로 변경</button>
                  )}
             </div>
         );
 
-
         const RankingView = ({ state }) => {
-            const { globalRanking, userId } = state;
-            
+            const { globalRanking, userData } = state;
             return (
                 <div className="p-4 space-y-4 pb-20">
                     <h2 className="text-2xl font-bold text-gray-800 flex items-center">
                         <Ranking className="w-6 h-6 mr-2 text-blue-500" /> 
                         챌린저 랭킹 (Top 10)
                     </h2>
-                    <p className="text-sm text-gray-500">친구와 동네 사람들의 실시간 랭킹입니다. (총 포인트 기준)</p>
-                    
+                    <p className="text-sm text-gray-500">열심히 활동하는 챌린저들과의 순위입니다.</p>
                     <div className="bg-white rounded-xl shadow-md divide-y divide-gray-100">
-                        {globalRanking.length === 0 && <p className="p-4 text-center text-gray-400">랭킹 데이터를 불러오는 중...</p>}
                         {globalRanking.map((ranker, index) => (
-                            <div key={ranker.userId} className={`flex justify-between items-center p-4 ${ranker.userId === userId ? 'bg-yellow-50 border-l-4 border-yellow-500 font-bold' : ''}`}>
+                            <div key={ranker.userId} className={`flex justify-between items-center p-4 ${ranker.userId === userData.userId ? 'bg-yellow-50 border-l-4 border-yellow-500 font-bold' : ''}`}>
                                 <div className="flex items-center space-x-3">
                                     <span className={`text-lg font-extrabold w-6 text-center ${index < 3 ? 'text-red-500' : 'text-gray-500'}`}>
                                         {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`}
                                     </span>
-                                    <span className="text-gray-800">{ranker.displayName}</span>
+                                    <span className="text-gray-800">{ranker.displayName} {ranker.userId === userData.userId && '(나)'}</span>
                                 </div>
                                 <span className="text-green-600 font-bold">{ranker.totalPoints} P</span>
                             </div>
@@ -605,88 +447,43 @@
                 </div>
             );
         };
-        
+
         const StatsView = ({ state }) => {
             const { userData } = state;
             const totalRecycledCount = userData.discardStats.ALL || 0;
             const treeGrowthPercentage = Math.min(100, (totalRecycledCount * 5));
             const treeLevel = Math.floor(treeGrowthPercentage / 20);
-
-            const stats = Object.entries(userData.discardStats)
-                .filter(([key]) => key !== 'ALL')
-                .map(([type, count]) => ({ type, count }))
-                .sort((a, b) => b.count - a.count);
-
+            const mapTypeToLabel = (type) => ({ PET: '페트병', BOX: '종이상자', CAN: '캔', PLASTIC: '플라스틱', VINYL: '비닐' })[type] || type;
+            const stats = Object.entries(userData.discardStats).filter(([key]) => key !== 'ALL').map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count);
             const mostDiscarded = stats.length > 0 ? stats[0].type : 'N/A';
             const mostDiscardedCount = stats.length > 0 ? stats[0].count : 0;
-            
-            const mapTypeToLabel = (type) => ({ PET: '페트병', BOX: '종이상자', CAN: '캔', PLASTIC: '플라스틱', VINYL: '비닐' })[type] || type;
 
             return (
                 <div className="p-4 space-y-6 pb-20">
-                    <h2 className="text-2xl font-bold text-gray-800 flex items-center">
-                        <Stats className="w-6 h-6 mr-2 text-green-500" /> 
-                        나의 환경 기여도
-                    </h2>
-
+                    <h2 className="text-2xl font-bold text-gray-800 flex items-center"><Stats className="w-6 h-6 mr-2 text-green-500" /> 나의 환경 기여도</h2>
                     <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100 text-center">
-                        <h3 className="text-xl font-bold text-gray-700 mb-4">
-                            나만의 에코 나무 키우기 (Level {treeLevel})
-                        </h3>
+                        <h3 className="text-xl font-bold text-gray-700 mb-4">나만의 에코 나무 (Level {treeLevel})</h3>
                         <div className="tree-container my-6">
                             <div className="tree-base"></div>
-                            <div 
-                                className="tree-leaves" 
-                                style={{ 
-                                    width: `${30 + treeGrowthPercentage * 0.7}px`, 
-                                    height: `${30 + treeGrowthPercentage * 0.7}px`, 
-                                    background: treeGrowthPercentage > 0 ? '#38A169' : '#ccc',
-                                    transform: `translate(-50%, -50%) scale(${treeGrowthPercentage / 100})`,
-                                    top: `${50 - (treeGrowthPercentage / 4)}%`
-                                }}
-                            ></div>
+                            <div className="tree-leaves" style={{ width: `${30 + treeGrowthPercentage * 0.7}px`, height: `${30 + treeGrowthPercentage * 0.7}px`, background: treeGrowthPercentage > 0 ? '#38A169' : '#ccc', transform: `translate(-50%, -50%) scale(${treeGrowthPercentage / 100})`, top: `${50 - (treeGrowthPercentage / 4)}%` }}></div>
                         </div>
-                        <p className="text-lg font-semibold text-green-600 mt-4">
-                            총 {totalRecycledCount}회 분리배출 성공
-                        </p>
-                        <p className="text-sm text-gray-500">
-                            이는 나무 약 **{treeLevel}그루**를 키운 효과와 같습니다!
-                        </p>
+                        <p className="text-lg font-semibold text-green-600 mt-4">총 {totalRecycledCount}회 분리배출 성공</p>
                     </div>
-
                     <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
-                        <h3 className="text-xl font-bold text-gray-700 flex items-center mb-3">
-                            <Badge className="w-5 h-5 mr-2 text-yellow-500" />
-                            획득한 뱃지 ({userData.badges.length})
-                        </h3>
+                        <h3 className="text-xl font-bold text-gray-700 flex items-center mb-3"><Badge className="w-5 h-5 mr-2 text-yellow-500" /> 획득한 뱃지 ({userData.badges.length})</h3>
                         <div className="flex flex-wrap gap-2">
-                            {userData.badges.map(b => (
-                                <div key={b.name} className="flex items-center bg-yellow-100 text-yellow-800 text-sm font-medium px-3 py-1.5 rounded-full shadow-sm">
-                                    {b.icon} {b.name}
-                                </div>
-                            ))}
-                            {userData.badges.length === 0 && <p className="text-sm text-gray-400">아직 획득한 뱃지가 없습니다. 포인트를 모아보세요!</p>}
+                            {userData.badges.map(b => (<div key={b.name} className="flex items-center bg-yellow-100 text-yellow-800 text-sm font-medium px-3 py-1.5 rounded-full shadow-sm">{b.icon} {b.name}</div>))}
+                            {userData.badges.length === 0 && <p className="text-sm text-gray-400">아직 획득한 뱃지가 없습니다.</p>}
                         </div>
                     </div>
-
-                    <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
-                        <h3 className="text-xl font-bold text-gray-700 flex items-center mb-4">
-                            <i className="fas fa-chart-bar mr-2"></i>
-                            나의 분리수거 통계
-                        </h3>
-                        <p className="text-lg font-semibold mb-3">
-                            가장 많이 버린 유형: <span className="text-blue-600">{mapTypeToLabel(mostDiscarded)} ({mostDiscardedCount}회)</span>
-                        </p>
+                     <div className="bg-white rounded-xl p-6 shadow-md border border-gray-100">
+                        <h3 className="text-xl font-bold text-gray-700 flex items-center mb-4"><i className="fas fa-chart-bar mr-2"></i> 나의 분리수거 통계</h3>
+                        <p className="text-lg font-semibold mb-3">가장 많이 버린 유형: <span className="text-blue-600">{mapTypeToLabel(mostDiscarded)} ({mostDiscardedCount}회)</span></p>
                         <div className="space-y-2">
                             {stats.slice(0, 5).map(({ type, count }) => (
                                 <div key={type} className="flex items-center">
                                     <span className="w-20 text-sm text-gray-600">{mapTypeToLabel(type)}</span>
-                                    <div className="flex-1 bg-gray-200 rounded-full h-3">
-                                        <div 
-                                            className="bg-blue-400 h-3 rounded-full" 
-                                            style={{ width: `${Math.max(10, (count / mostDiscardedCount) * 100)}%` }}
-                                        ></div>
-                                    </div>
+                                    <div className="flex-1 bg-gray-200 rounded-full h-3"><div className="bg-blue-400 h-3 rounded-full" style={{ width: `${Math.max(10, (count / mostDiscardedCount) * 100)}%` }}></div></div>
                                     <span className="ml-2 text-sm text-gray-600">{count}회</span>
                                 </div>
                             ))}
@@ -695,17 +492,14 @@
                 </div>
             );
         };
-        
+
         const CommunityView = () => (
             <div className="p-8 text-center pt-20">
                 <Community className="text-6xl text-gray-300 mb-4" />
-                <h2 className="text-xl font-bold text-gray-700">커뮤니티 (준비 중)</h2>
-                <p className="text-sm text-gray-500 mt-2">
-                    친구들과 그룹을 만들거나, 동네별 챌린지를 시작할 수 있는 기능이 곧 추가될 예정입니다!
-                </p>
+                <h2 className="text-xl font-bold text-gray-700">커뮤니티</h2>
+                <p className="text-sm text-gray-500 mt-2">이 기능은 서버 연동이 필요하여<br/>현재 시뮬레이션 모드에서는 지원되지 않습니다.</p>
             </div>
         );
-
 
         const TabBar = ({ activeTab, setActiveTab }) => {
             const tabs = [
@@ -714,7 +508,6 @@
                 { id: 'stats', icon: Stats, label: '기여도' },
                 { id: 'community', icon: Community, label: '커뮤니티' },
             ];
-
             return (
                 <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 pb-safe z-40">
                     <div className="flex justify-around items-center max-w-md mx-auto h-16">
@@ -722,13 +515,7 @@
                             const Icon = tab.icon;
                             const isActive = tab.id === activeTab;
                             return (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setActiveTab(tab.id)}
-                                    className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition ${
-                                        isActive ? 'text-emerald-600' : 'text-gray-400 hover:text-gray-600'
-                                    }`}
-                                >
+                                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition ${isActive ? 'text-emerald-600' : 'text-gray-400 hover:text-gray-600'}`}>
                                     <Icon className={`w-6 h-6 transition-transform ${isActive ? 'scale-110' : ''}`} />
                                     <span className="text-xs font-medium">{tab.label}</span>
                                 </button>
@@ -748,7 +535,6 @@
                  console.error("Root container not found.");
              }
         };
-
     </script>
 </body>
 </html>
